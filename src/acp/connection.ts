@@ -91,7 +91,7 @@ export class AntigravityAcpConnection {
 			onCompatibilityNoise: () => this.process.recordCompatibilityNoise(),
 			onProtocolError: (error) => {
 				rejectProtocolFailure(error);
-				void this.process.close();
+				void this.close().catch(() => undefined);
 			},
 			closeOnProtocolError: true,
 		});
@@ -323,8 +323,12 @@ export class AntigravityAcpConnection {
 		await this.connection.agent.notify(methods.agent.session.cancel, { sessionId });
 	}
 
+	get closed(): boolean {
+		return this.closePromise !== undefined || this.connection.signal.aborted || !this.process.alive;
+	}
+
 	async close(): Promise<void> {
-		this.connection.close();
+		(this.connection as ClientConnection | undefined)?.close();
 		this.closePromise ??= this.process.close();
 		await this.closePromise;
 	}

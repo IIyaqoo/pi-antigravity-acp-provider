@@ -24,6 +24,51 @@ describe("AntigravityAcpConnection", () => {
 		}
 	});
 
+	it("marks the connection closed immediately upon close() even while the child process is alive", async () => {
+		const connection = new AntigravityAcpConnection({
+			cwd: path.dirname(fakeAgent),
+			command: process.execPath,
+			args: [fakeAgent],
+		});
+		const realClose = connection.process.close.bind(connection.process);
+		let releaseClose!: () => void;
+		const closeGate = new Promise<void>((resolve) => {
+			releaseClose = resolve;
+		});
+		connection.process.close = async () => {
+			await closeGate;
+			await realClose();
+		};
+		try {
+			await connection.initialize();
+			expect(connection.closed).toBe(false);
+			const closing = connection.close();
+			expect(connection.closed).toBe(true);
+			expect(connection.process.alive).toBe(true);
+			releaseClose();
+			await closing;
+			expect(connection.process.alive).toBe(false);
+		} finally {
+			releaseClose?.();
+			await realClose();
+		}
+	});
+
+	it("marks the connection closed on protocol error", async () => {
+		const connection = new AntigravityAcpConnection({
+			cwd: path.dirname(fakeAgent),
+			command: process.execPath,
+			args: [fakeAgent, "malformed-output"],
+			initializeTimeoutMs: 5_000,
+		});
+		try {
+			await expect(connection.initialize()).rejects.toThrow("malformed JSON");
+			expect(connection.closed).toBe(true);
+		} finally {
+			await connection.close();
+		}
+	});
+
 	it("rejects malformed output without an unhandled SDK receive rejection", async () => {
 		const connection = new AntigravityAcpConnection({
 			cwd: path.dirname(fakeAgent),
