@@ -254,6 +254,34 @@ describe("AntigravityAcpConnection", () => {
 		} finally { await connection.close(); }
 	});
 
+	it("surfaces redacted stderrTail on prompt watchdog and operation timeouts", async () => {
+		const connection = new AntigravityAcpConnection({
+			cwd: path.dirname(fakeAgent),
+			command: process.execPath,
+			args: [fakeAgent],
+			promptIdleTimeoutMs: 40,
+		});
+		try {
+			await connection.initialize();
+			const session = await connection.newSession(process.cwd());
+			connection.process.child.stderr.push(
+				"WARNING: System step error (HTTP 502): The model is currently unreachable. api_key=AIza1234567890abcdefghijkl\n",
+			);
+			const error = await connection.prompt({
+				sessionId: session.sessionId,
+				prompt: [{ type: "text", text: "hang" }],
+			}).catch((cause: unknown) => cause);
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).message).toContain(
+				"Antigravity ACP session/prompt timed out: no progress for 40ms: WARNING: System step error (HTTP 502): The model is currently unreachable.",
+			);
+			expect((error as Error).message).toContain("<redacted>");
+			expect((error as Error).message).not.toContain("AIza1234567890abcdefghijkl");
+		} finally {
+			await connection.close();
+		}
+	});
+
 	it("rejects invalid inactivity options before starting a child", () => {
 		expect(() => new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath, args: [fakeAgent], promptIdleTimeoutMs: Infinity })).toThrow(RangeError);
 	});

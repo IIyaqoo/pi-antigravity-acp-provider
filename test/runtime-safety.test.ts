@@ -822,4 +822,64 @@ describe("closed connection eviction and retry recovery", () => {
 		expect((await runtime.snapshot()).bindings).toBe(0);
 		expect(connections[0]?.process.alive).toBe(false);
 	});
+
+	it("commits consumed tool continuation context before awaiting prompt completion so retry does not resend external-delta or user prompt", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-tool-continuation-retry-"));
+		roots.push(root);
+		const log = path.join(root, "calls.jsonl");
+		fs.writeFileSync(log, "");
+		const store = new AcpSessionStore(path.join(root, "sessions.json"));
+		const runtime = new AntigravityRuntime((options) => new AntigravityAcpConnection({
+			...options,
+			command: process.execPath,
+			args: [fakeAgent],
+			env: { ...process.env, FAKE_AGENT_LOG_FILE: log },
+			promptIdleTimeoutMs: 80,
+		}), "yolo", store);
+		runtimes.push(runtime);
+
+		const initialContext = normalizeContext({
+			tools,
+			messages: [user("use bridge delayed")],
+		});
+		const first = await drain(runtime.stream(model, initialContext, { sessionId: "cont-retry", apiKey: "test-key" }));
+		expect(first.stopReason).toBe("toolUse");
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing tool call");
+
+		const contContext = normalizeContext({
+			messages: [
+				...initialContext.messages,
+				first,
+				{
+					role: "toolResult",
+					toolCallId: call.id,
+					toolName: call.name,
+					content: [{ type: "text", text: "bridge-output-payload" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+		});
+
+		// Continuation delivers the tool result to ACP, then stalls during "bridge delayed" (500ms > 80ms watchdog).
+		const stalled = await drain(runtime.stream(model, contContext, { sessionId: "cont-retry", apiKey: "test-key" }));
+		expect(stalled.stopReason).toBe("error");
+		expect(stalled.errorMessage).toContain("timed out");
+		expect(store.get("cont-retry")?.messageCount).toBe(contContext.messages.length);
+
+		// Retry on the restored session must send only WARM_CONTINUATION without external-delta or duplicate user prompt.
+		const retried = await drain(runtime.stream(model, contContext, { sessionId: "cont-retry", apiKey: "test-key" }));
+		expect(retried.stopReason).toBe("stop");
+		const prompts = fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
+			.map((line) => JSON.parse(line) as { method: string; prompt?: Array<{ type: string; text?: string }> })
+			.filter((entry) => entry.method === "session/prompt");
+		expect(prompts).toHaveLength(2);
+		expect(prompts[1]?.prompt).toEqual([
+			{
+				type: "text",
+				text: "Continue the current Pi user request already given in this session. Incorporate the latest tool results without repeating completed tool actions.",
+			},
+		]);
+	});
 });

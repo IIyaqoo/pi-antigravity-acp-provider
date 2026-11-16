@@ -535,6 +535,7 @@ export class AntigravityRuntime {
 				this.noteContinuationInstructions(binding, context);
 				binding.pendingContextCount = context.messages.length;
 				binding.pendingContextFingerprint = messagesFingerprint(context.messages);
+				this.commitProgress(binding);
 				binding.permission = undefined;
 				clearTimeout(pending.timer);
 				if (
@@ -565,6 +566,7 @@ export class AntigravityRuntime {
 				this.noteContinuationInstructions(binding, context);
 				binding.pendingContextCount = context.messages.length;
 				binding.pendingContextFingerprint = messagesFingerprint(context.messages);
+				this.commitProgress(binding);
 				for (const { pending, message } of results) {
 					binding.pendingTools.delete(pending.invocation.id);
 					pending.resolve(toMcpToolResult(message as ToolResultMessage));
@@ -695,6 +697,9 @@ export class AntigravityRuntime {
 					activeWriter.done("stop");
 			}
 		} catch (error) {
+			if ((binding.permission || binding.pendingTools.size > 0) && (binding.writer ?? writer).finished) {
+				this.commitProgress(binding, (binding.writer ?? writer).message);
+			}
 			if (isAbort(error) || binding.abortRequested) abortTurn(binding);
 			// Evict dead/closing connections before writer.fail() wakes callers/retries,
 			// while keeping sessionStore intact so the retry can resume or rebuild cleanly.
@@ -905,6 +910,14 @@ export class AntigravityRuntime {
 			await Promise.allSettled([connection.close(), bridge?.close() ?? Promise.resolve()]);
 			throw error;
 		}
+	}
+
+	private commitProgress(binding: Binding, assistantMessage?: Context["messages"][number]): void {
+		if (binding.pendingContextCount <= 0) return;
+		binding.messageCount = binding.pendingContextCount;
+		binding.historyFingerprint = binding.pendingContextFingerprint;
+		binding.expectedAssistantFingerprint = assistantMessage ? messageFingerprint(assistantMessage) : undefined;
+		this.persistBinding(binding);
 	}
 
 	private persistBinding(binding: Binding): void {

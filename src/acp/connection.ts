@@ -407,8 +407,9 @@ export class AntigravityAcpConnection {
 		let rejectStall!: (error: Error) => void;
 		const stalled = new Promise<never>((_resolve, reject) => { rejectStall = reject; });
 		const watchdog = new PromptWatchdog(this.promptIdleTimeoutMs, this.promptWorkIdleTimeoutMs, (busy, ms) => {
+			const detail = this.process.stderrTail.trim() ? `: ${this.process.stderrTail.trim()}` : "";
 			rejectStall(new AntigravityAcpError("timeout",
-				`Antigravity ACP session/prompt timed out: no ${busy ? "tool/permission " : ""}progress for ${ms}ms`));
+				`Antigravity ACP session/prompt timed out: no ${busy ? "tool/permission " : ""}progress for ${ms}ms${detail}`));
 			void this.close().catch(() => undefined);
 		});
 		this.watchdogs.set(request.sessionId, watchdog);
@@ -435,8 +436,9 @@ export class AntigravityAcpConnection {
 				this.processFailure,
 				new Promise<never>((_resolve, reject) => {
 					timer = setTimeout(() => {
+						const detail = this.process.stderrTail.trim() ? `: ${this.process.stderrTail.trim()}` : "";
 						void this.close();
-						reject(new AntigravityAcpError("timeout", `Antigravity ACP ${phase} timed out after ${timeoutMs}ms`));
+						reject(new AntigravityAcpError("timeout", `Antigravity ACP ${phase} timed out after ${timeoutMs}ms${detail}`));
 					}, timeoutMs);
 					timer.unref?.();
 				}),
